@@ -1,0 +1,19 @@
+# FairGuard AI — pinned dependencies (tested together on Python 3.12)
+pandas==2.3.3
+numpy==2.2.4
+scikit-learn==1.9.0
+scipy==1.17.1
+fairlearn==0.15.0
+shap==0.54.1
+mlflow==3.17.1
+streamlit==1.41.1
+plotly==6.6.0
+pytest==8.3.4
+
+# Optional — local Hugging Face judges for text safety (no paid APIs).
+# Uncomment to let fairguard.judges use transformer models automatically:
+# transformers
+# torch
+
+# Optional — extra drift reports. PSI + KS are already built in, Evidently is not required:
+# evidently

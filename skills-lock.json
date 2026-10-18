@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "skills": {
+    "machine-learning": {
+      "source": "mindrally/skills",
+      "sourceType": "github",
+      "skillPath": "machine-learning/SKILL.md",
+      "computedHash": "8226b165c426787b758160b227a12b4c29ead3b9b836f1842f1392d6db672441"
+    }
+  }
+}

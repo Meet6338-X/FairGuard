@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# Generated during runs — recreate with the scripts in scripts/
+data/*.csv
+data/*.json
+data/processed/
+data/raw/
+models/
+mlruns/
+reports/*
+!reports/.gitkeep
+
+# Original university documents may contain personal contact details.
+# This repository is public, so they stay out of version control.
+*.pdf
+*.docx
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
