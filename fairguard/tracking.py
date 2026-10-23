@@ -33,6 +33,8 @@ def log_assessment(assessment: dict, tracking_dir=None, extra_artifacts=None) ->
             "risk_level": assessment["risk"]["level"],
             "decision": assessment["decision"],
             "reviewer_decision": assessment.get("reviewer_decision") or "pending",
+            "evaluation_scope": (assessment.get("evaluation") or {}).get("scope", "full_dataset"),
+            "explainer": ((assessment.get("explainability") or {}).get("explainer") or "none"),
         })
 
         metrics = {"risk_score": assessment["risk"]["score"]}
@@ -43,8 +45,23 @@ def log_assessment(assessment: dict, tracking_dir=None, extra_artifacts=None) ->
         for key in ("demographic_parity_difference", "equalized_odds_difference"):
             if key in fairness:
                 metrics[f"fairness.{key}"] = float(fairness[key])
+        # Confidence intervals are logged as the interval width, so runs can be
+        # compared by how certain the fairness finding is.
+        for key in ("demographic_parity_difference_ci", "equalized_odds_difference_ci"):
+            interval = fairness.get(key)
+            if interval:
+                metrics[f"fairness.{key}.low"] = float(interval[0])
+                metrics[f"fairness.{key}.high"] = float(interval[1])
+        if fairness.get("small_groups"):
+            metrics["fairness.small_group_count"] = float(len(fairness["small_groups"]))
         if (assessment.get("drift") or {}):
             metrics["drift.max_psi"] = max(entry["psi"] for entry in assessment["drift"].values())
+            metrics["drift.major_feature_count"] = float(
+                sum(1 for entry in assessment["drift"].values() if entry.get("psi_level") == "major")
+            )
+        risk = assessment.get("risk") or {}
+        if risk.get("coverage") is not None:
+            metrics["risk.coverage"] = float(risk["coverage"])
         mlflow.log_metrics(metrics)
 
         mlflow.log_dict(assessment, "assessment.json")
@@ -75,6 +92,8 @@ def history(tracking_dir=None) -> pd.DataFrame:
         "tags.risk_level": "level",
         "tags.decision": "decision",
         "tags.reviewer_decision": "reviewer",
+        "tags.evaluation_scope": "scope",
+        "tags.explainer": "explainer",
     }
     present = {key: label for key, label in columns.items() if key in runs.columns}
     history_frame = runs[list(present)].rename(columns=present)
