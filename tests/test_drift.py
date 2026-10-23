@@ -53,5 +53,42 @@ def test_drift_risk():
     assert drift.drift_risk({}) == 0.0
     stable = {"x": {"psi_level": "stable"}, "y": {"psi_level": "stable"}}
     assert drift.drift_risk(stable) == 0.0
+    # RC-06: the worst feature always keeps half of the score, so a single
+    # major shift among two features is 0.5 * mean + 0.5 * peak = 0.75
+    # instead of the old flat mean of 0.5.
     mixed = {"x": {"psi_level": "major"}, "y": {"psi_level": "stable"}}
-    assert drift.drift_risk(mixed) == 0.5
+    assert drift.drift_risk(mixed) == 0.75
+
+
+def test_drift_risk_is_importance_aware():
+    """A shift in a feature the model relies on must score worse (RC-06)."""
+    result = {
+        "a": {"psi_level": "major"},
+        "b": {"psi_level": "moderate"},
+    }
+    a_matters = drift.drift_risk(result, importance={"a": 10.0, "b": 0.01})
+    b_matters = drift.drift_risk(result, importance={"a": 0.01, "b": 10.0})
+    assert a_matters > b_matters
+
+
+def test_drift_risk_single_critical_feature_is_not_diluted():
+    """One major shift among twenty features must not read as 'no risk' (RC-06)."""
+    result = {f"f{i}": {"psi_level": "stable"} for i in range(19)}
+    result["income_lakhs"] = {"psi_level": "major"}
+    assert drift.drift_risk(result) >= 0.5
+
+
+def test_aggregate_importance_maps_encoded_back_to_raw():
+    folded = drift.aggregate_importance(
+        {"gender_female": 0.3, "gender_male": 0.2, "credit_score": 0.5})
+    assert folded["gender"] == 0.5
+    assert folded["credit_score"] == 0.5
+
+
+def test_aggregate_importance_uses_raw_feature_list():
+    folded = drift.aggregate_importance(
+        {"gender_female": 0.3, "gender_male": 0.2, "credit_score": 0.5},
+        raw_features=["gender", "credit_score"])
+    assert folded["gender"] == 0.5
+    assert folded["credit_score"] == 0.5
+    assert "credit" not in folded
