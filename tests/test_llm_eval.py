@@ -5,10 +5,25 @@ from fairguard import llm_eval
 def test_evaluate_texts_summary_shape():
     result = llm_eval.evaluate_texts(["you are stupid", "have a nice day"])
     assert result["n_texts"] == 2
-    assert set(result["kind_summary"]) == {"toxicity", "bias", "hate_speech"}
+    # RC-13: the PII judge is part of the default set now.
+    assert set(result["kind_summary"]) == {"toxicity", "bias", "hate_speech", "pii"}
     assert len(result["per_text"]) == 2
     assert 0 <= result["risk"] <= 1
     assert isinstance(result["flagged"], int)
+
+
+def test_evaluate_texts_reports_backend_per_kind():
+    """RC-14: every kind reports the backend it actually used."""
+    result = llm_eval.evaluate_texts(["hello"])
+    assert set(result["backends"]) == set(result["kind_summary"])
+    assert all(isinstance(v, str) for v in result["backends"].values())
+    assert result["backend"] in {"heuristic", "transformer", "mixed", "none"}
+
+
+def test_evaluate_texts_rejects_mismatched_references():
+    import pytest
+    with pytest.raises(ValueError):
+        llm_eval.evaluate_texts(["a", "b"], references=["only one"])
 
 
 def test_evaluate_texts_flags_bad_text():
