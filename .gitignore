@@ -15,6 +15,13 @@ mlruns/
 reports/*
 !reports/.gitkeep
 
+# Data visualizations are regenerated with scripts/visualize_data.py, but the
+# gallery is kept in the repo so docs/visualize.md can reference the charts.
+!visualize/
+
+# Hand-written example inputs for the --texts flag (not generated, so kept).
+!data/sample_texts.csv
+
 # Original university documents may contain personal contact details.
 # This repository is public, so they stay out of version control.
 *.pdf
