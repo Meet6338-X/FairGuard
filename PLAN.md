@@ -59,16 +59,38 @@ in order. The acceptance check of a step must pass before its PR is merged.
 Automatic retraining or bias mitigation in production, legal/regulatory
 certification, deep-learning-specific explainability for all architectures.
 
-## Status — 2026-10-18
+## Status — 2026-10-22 (post-audit)
 
-All 17 steps above are implemented and locally committed on `main` (one commit per
-module) and verified:
+All 17 steps above are implemented and committed on `main` and verified:
 
-- `python -m pytest tests -q` → **59 passed** (fully offline, no keys)
+- `python -m pytest tests -q` → **125 passed** (fully offline, no keys)
 - end-to-end: demo data → train all three models → `scripts/run_assessment.py`
-  → demo accuracy **0.992** / risk Medium / decision **Approve with monitoring**, with JSON + Markdown + model card exported
+  → **hold-out** accuracy **0.992** (gradient boosting) on 500 unseen rows →
+  risk **0.7335 High** / decision **Needs review** when a real drift baseline
+  is supplied, with JSON + Markdown + model card exported
 - dashboard: Streamlit `AppTest` run + "Run assessment" click → no exceptions, all tabs render
 - CI: `.github/workflows/tests.yml` runs the suite on every push / pull request
+
+### Audit and root-cause fix round (2026-10-22)
+
+A full audit of the ML core found **24 root causes** (wrong SHAP explainer,
+train/test contamination, categorical features silently dropped, fairness
+checks that ignored equalized odds, drift measured against itself, privacy
+false positives on numeric ID columns, missing calibration checks, missing
+confidence intervals, and more). Every one is documented with the measurement
+that proved it and the fix that closed it in
+[`ROOT_CAUSES.md`](ROOT_CAUSES.md). The headline changes:
+
+| Area | Before | After |
+|---|---|---|
+| SHAP explainer | always `PermutationExplainer` (234 s on `communities`) | exact `TreeExplainer` / `LinearExplainer` (3.5 s) |
+| Evaluation | scored on the training rows | scored on the hold-out split stored in the artifact |
+| Features | numeric only — all categoricals dropped | numeric **+** one-hot encoded categoricals |
+| Fairness | DPD only | DPD **and** EOD, with 95 % bootstrap CIs |
+| Drift | PSI vs itself (always 0) | PSI vs a different dataset, weighted by feature importance |
+| Privacy | every numeric column scanned for PII | type-aware scanning, column-name triggers |
+| Performance | accuracy / F1 / ROC-AUC | **+ Brier score and calibration error (ECE)** |
+| Risk | score that depended on coverage | score **+ coverage** and the dimensions assessed |
 
 ### Datasets (10 total, one-command download via `scripts/download_datasets.py`)
 
@@ -112,10 +134,21 @@ Only the synthetic demo data reaches the 0.99 target — on real tabular credit/
 data 0.99 hold-out accuracy is not achievable without data leakage (the program
 reports this honestly; best real result is student_performance at 0.900).
 
-### Note on SHAP speed
+### Note on SHAP speed (fixed)
 
-`communities` has 99 encoded features; SHAP's PermutationExplainer takes ~3.5 min
-on that dataset. All other datasets assess in seconds.
+`communities` has 99 encoded features. With the old code every model fell
+through to SHAP's `PermutationExplainer` and the assessment took ~3.5 min.
+The explainer is now selected from the **estimator inside the pipeline**:
+`TreeExplainer` for trees, `LinearExplainer` for linear models, permutation
+only as a last resort — 3.5 s on the same dataset.
+
+### Documentation
+
+- [`USER_MANUAL.md`](USER_MANUAL.md) — every command and the full manual flow.
+- [`EXPLAIN.md`](EXPLAIN.md) — how the project works, module by module.
+- [`ROOT_CAUSES.md`](ROOT_CAUSES.md) — the 24 root causes, the evidence, the fixes.
+- [`UPDATE.md`](UPDATE.md) — the update log, including the transformer text-judges rollout plan.
+- [`docs/fairguard_architecture.svg`](docs/fairguard_architecture.svg) — architecture diagram (also the README hero image).
 
 Pull requests are the next phase (as requested): each step becomes one branch
 (`step-XX-name`) replayed from its local commit, with a detailed PR description,
