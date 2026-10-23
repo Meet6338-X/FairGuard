@@ -12,6 +12,18 @@ Endpoints (all under /api):
     GET    /api/history         MLflow run history
     POST   /api/review          save a reviewer decision on an assessment
     GET    /api/report/{run_id}/{fmt}   json | md | card  — export a report
+
+Root causes fixed here
+----------------------
+* **RC-16** ``POST /api/review`` ignored ``run_id`` and always overwrote the
+  *newest* assessment on disk, so a reviewer's decision could be attached to
+  the wrong run.  The run is now looked up by id.
+* **RC-07** ``use_reference`` defaulted to ``True``, which compared the
+  dataset with itself — every PSI was exactly 0 and the Drift tab looked
+  reassuringly green.  Drift now needs an explicit *different* reference
+  dataset, and the response says when a self-comparison was requested.
+* **RC-02** assessments are scored on the hold-out split stored in the model
+  artifact, so the reported accuracy is out-of-sample.
 """
 import json
 import sys
@@ -27,7 +39,7 @@ from typing import Optional
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # allow `import fairguard`
 from fairguard import config, data, pipeline, report, tracking, train
 
-app = FastAPI(title="FairGuard AI API", version="0.2.0")
+app = FastAPI(title="FairGuard AI API", version="0.3.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -44,6 +56,7 @@ class TrainRequest(BaseModel):
     label: str = "approved"
     sensitive: Optional[str] = None
     model_types: list[str] = ["logistic_regression", "random_forest", "gradient_boosting"]
+    test_size: float = 0.25
 
 
 class TrainResponse(BaseModel):
@@ -56,12 +69,15 @@ class AssessRequest(BaseModel):
     label: str = "approved"
     sensitive: str = "gender"
     threshold: float = 0.5
-    use_reference: bool = True             # assess drift against itself (no separate reference yet)
+    # RC-07: drift needs a *different* dataset to be meaningful.
+    reference: Optional[str] = None        # filename in data/ used as the drift baseline
+    use_reference: bool = False            # kept for backwards compatibility
     texts: Optional[list[str]] = None
     model_id: Optional[str] = None
     model_version: str = "1.0"
     dataset_id: Optional[str] = None
     run_mlflow: bool = True
+    full_dataset: bool = False             # score the whole dataset (in-sample)
 
 
 class ReviewRequest(BaseModel):
@@ -98,6 +114,24 @@ def _assessment_id(assessment: dict) -> str:
     return stamp or ts
 
 
+def _find_report(run_id: str) -> Path:
+    """Locate the assessment JSON for a run id (RC-16).
+
+    Exact match first, then the collision-suffixed variants, then a
+    substring search as a last resort.
+    """
+    exact = config.REPORTS_DIR / f"assessment_{run_id}.json"
+    if exact.exists():
+        return exact
+    suffixed = sorted(config.REPORTS_DIR.glob(f"assessment_{run_id}_*.json"))
+    if suffixed:
+        return suffixed[0]
+    loose = sorted(p for p in config.REPORTS_DIR.glob("assessment_*.json") if run_id in p.stem)
+    if loose:
+        return loose[0]
+    raise HTTPException(status_code=404, detail=f"assessment '{run_id}' not found")
+
+
 # --- endpoints --------------------------------------------------------------
 
 @app.get("/api/datasets")
@@ -122,23 +156,32 @@ def train_models(req: TrainRequest):
         raise HTTPException(status_code=400, detail=f"label '{req.label}' not in dataset")
     if req.sensitive and req.sensitive not in df.columns:
         raise HTTPException(status_code=400, detail=f"sensitive '{req.sensitive}' not in dataset")
+    if not data.is_binary_label(df[req.label]):
+        raise HTTPException(status_code=400, detail=f"label '{req.label}' is not binary")
 
     features = train.pick_features(df, req.label, req.sensitive)
     out = []
     for model_type in req.model_types:
         model, X_train, X_test, y_train, y_test = train.train_model(
-            df, model_type, label=req.label, features=features
+            df, model_type, label=req.label, features=features, test_size=req.test_size
         )
         name = f"{model_type}.pkl" if not req.dataset else f"{stem}_{model_type}.pkl"
+        # RC-02: store the hold-out split so the assessment can be scored
+        # out-of-sample later.
+        holdout = train.make_holdout(df, test_size=req.test_size, label=req.label,
+                                     features=features)
         path = train.save_model(
             model, config.MODELS_DIR / name, X_train.columns, model_type,
-            raw_features=features,
+            raw_features=features, holdout=holdout,
+            meta={"label": req.label, "balanced": True,
+                  "test_accuracy": float((model.predict(X_test) == y_test).mean())},
         )
         accuracy = (model.predict(X_test) == y_test).mean()
         out.append({
             "model": name, "model_type": model_type,
             "test_accuracy": round(float(accuracy), 4),
             "features": features,
+            "holdout_rows": holdout["n_test"],
         })
     return {"results": out}
 
@@ -152,7 +195,28 @@ def assess(req: AssessRequest):
         from fairguard import llm_eval
         text_result = llm_eval.evaluate_texts(req.texts)
 
-    reference = df if req.use_reference else None
+    # RC-07: a self-comparison is not a drift measurement.
+    reference = None
+    reference_note = None
+    if req.reference:
+        reference = _load_dataset(req.reference)
+        if reference.equals(df):
+            reference_note = ("The reference dataset is identical to the assessed dataset — "
+                              "every PSI is 0 by construction. This is a baseline, not evidence "
+                              "of stability.")
+    elif req.use_reference:
+        reference = df
+        reference_note = ("use_reference=True compares the dataset with itself — every PSI is 0 "
+                          "by construction. This is a baseline, not evidence of stability.")
+
+    # RC-02: score the hold-out rows the model never saw.
+    eval_df = None
+    holdout = artifact.get("holdout")
+    if not req.full_dataset and holdout:
+        eval_df = train.holdout_rows(df, holdout)
+        if len(eval_df) == len(df):
+            eval_df = None
+
     assessment = pipeline.run_assessment(
         df=df,
         model=artifact["model"],
@@ -168,14 +232,19 @@ def assess(req: AssessRequest):
         text=text_result,
         extra_artifacts=[str(config.MODELS_DIR / req.model)],
         run_mlflow=req.run_mlflow,
+        eval_df=eval_df,
     )
 
     # persist JSON + markdown + model card
     saved = report.save_report(assessment, out_dir=config.REPORTS_DIR)
+    # The run id comes from the file that was actually written, so it always
+    # resolves back to this assessment.
+    run_id = Path(saved["json"]).stem.replace("assessment_", "", 1)
     return {
-        "run_id": _assessment_id(assessment),
+        "run_id": run_id,
         "assessment": assessment,
         "saved": saved,
+        "reference_note": reference_note,
     }
 
 
@@ -190,44 +259,37 @@ def history():
 @app.post("/api/review")
 def review(req: ReviewRequest):
     decision_map = {"pending": None, "Approve": "Approve",
-                    "Approve with monitoring": "Approve with monitoring",
-                    "Needs review": "Needs review", "Block": "Block"}
+                     "Approve with monitoring": "Approve with monitoring",
+                     "Needs review": "Needs review", "Block": "Block"}
     if req.decision not in decision_map:
         raise HTTPException(status_code=400, detail="invalid decision")
-    # MLflow tags are immutable per run; record the decision as a new run param is
-    # not supported retroactively, so we keep it in-memory for the dashboard and
-    # store it on the latest matching run's assessment json instead.
-    saved = list(config.REPORTS_DIR.glob("assessment_*.json"))
-    if not saved:
-        raise HTTPException(status_code=404, detail="no assessments found")
-    latest = max(saved, key=lambda p: p.stat().st_mtime)
-    assessment = json.loads(latest.read_text(encoding="utf-8"))
+    # RC-16: find the assessment the reviewer actually meant.  The previous
+    # implementation always wrote to the newest report on disk.
+    path = _find_report(req.run_id)
+    assessment = json.loads(path.read_text(encoding="utf-8"))
     assessment["reviewer_decision"] = decision_map[req.decision]
     assessment["reviewer_note"] = req.note
-    latest.write_text(json.dumps(assessment, indent=2, default=str), encoding="utf-8")
-    # also re-log to mlflow so history reflects it
+    assessment["reviewed_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    path.write_text(json.dumps(assessment, indent=2, default=str), encoding="utf-8")
+    # MLflow tags are immutable per run, so the decision is also logged as a
+    # new run (the dashboard reads the JSON files for the authoritative state).
     tracking.log_assessment(assessment, extra_artifacts=None)
-    return {"ok": True, "run_id": latest.stem, "decision": assessment["reviewer_decision"]}
+    return {"ok": True, "run_id": req.run_id, "decision": assessment["reviewer_decision"]}
 
 
 @app.get("/api/report/{run_id}/{fmt}")
 def get_report(run_id: str, fmt: str):
     if fmt not in ("json", "md", "card"):
         raise HTTPException(status_code=400, detail="fmt must be json, md or card")
-    matches = list(config.REPORTS_DIR.glob(f"assessment_{run_id}*.json")) or \
-              list(config.REPORTS_DIR.glob(f"*_{run_id}*.json"))
-    if not matches:
-        # try newest file containing run_id substring
-        matches = [p for p in config.REPORTS_DIR.glob("assessment_*.json")
-                   if run_id in p.stem]
-    if not matches:
-        raise HTTPException(status_code=404, detail="report not found")
-    assessment = json.loads(matches[0].read_text(encoding="utf-8"))
+    path = _find_report(run_id)
+    assessment = json.loads(path.read_text(encoding="utf-8"))
     if fmt == "json":
-        return {"content": report.to_json(assessment), "filename": matches[0].name}
+        return {"content": report.to_json(assessment), "filename": path.name}
     if fmt == "md":
-        return {"content": report.build_markdown(assessment), "filename": matches[0].name.replace(".json", ".md")}
-    return {"content": report.build_model_card(assessment), "filename": matches[0].name.replace(".json", "_model_card.md")}
+        return {"content": report.build_markdown(assessment),
+                "filename": path.name.replace(".json", ".md")}
+    return {"content": report.build_model_card(assessment),
+            "filename": path.name.replace(".json", "_model_card.md")}
 
 
 if __name__ == "__main__":
