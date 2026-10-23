@@ -6,6 +6,18 @@ Run from the repo root:
 
 Flow: pick a dataset + model in the sidebar → run the assessment once →
 explore the results in the tabs. Everything runs locally.
+
+Root causes fixed here
+----------------------
+* **RC-20** the "Dataset profile" panel rendered the *outer* dataframe, so
+  after the automatic dataset switch (the model implies its own dataset) the
+  profile described a dataset that was not the one assessed.
+* **RC-07** the drift reference defaulted to the dataset itself, which makes
+  every PSI exactly 0 — the Drift tab looked green no matter what.  A
+  reference dataset now has to be picked explicitly, and a self-comparison is
+  labelled as a baseline.
+* **RC-02** the assessment is scored on the hold-out split stored in the
+  model artifact, and the scope is shown in the Overview.
 """
 import sys
 from pathlib import Path
@@ -35,7 +47,12 @@ def available_models() -> list[Path]:
     return sorted(Path(config.MODELS_DIR).glob("*.pkl"))
 
 
-def run_pipeline(df, upload, sensitive, label, threshold, use_reference, texts):
+def available_datasets() -> list[str]:
+    return sorted(p.name for p in Path(config.DATA_DIR).glob("*.csv"))
+
+
+def run_pipeline(df, upload, sensitive, label, threshold, reference_name, texts):
+    """Run one assessment. Returns (assessment, dataframe_that_was_assessed)."""
     artifact = train.load_model(upload)
     text_result = None
     if texts:
@@ -63,22 +80,45 @@ def run_pipeline(df, upload, sensitive, label, threshold, use_reference, texts):
                 )
                 df = data.load_csv(implied_path)
 
+    # RC-07: the reference must be a *different* dataset.
+    reference = None
+    if reference_name:
+        reference_path = Path(config.DATA_DIR) / reference_name
+        if reference_path.exists():
+            reference = data.load_csv(reference_path)
+            if reference.equals(df):
+                st.warning(
+                    "The drift reference is the same dataset as the assessed one — every PSI "
+                    "will be 0 by construction. This is a baseline, not evidence of stability."
+                )
+
+    # RC-02: score the hold-out rows the model never saw.
+    eval_df = None
+    holdout = artifact.get("holdout")
+    if holdout:
+        eval_df = train.holdout_rows(df, holdout)
+        if len(eval_df) == len(df):
+            eval_df = None
+
     with st.spinner("Running the full assessment (fairness, SHAP, privacy, drift)…"):
-        return pipeline.run_assessment(
+        assessment = pipeline.run_assessment(
             df=df,
             model=artifact["model"],
             features=artifact["features"],
             raw_features=artifact.get("raw_features"),
             label=label,
             sensitive=sensitive,
-            reference=df if use_reference else None,
+            reference=reference,
             model_id=upload.stem,
             model_version=artifact.get("model_type", "dev"),
             dataset_id=upload.stem,
             threshold=threshold,
             text=text_result,
             extra_artifacts=[str(upload)],
+            eval_df=eval_df,
         )
+    # RC-20: hand back the frame that was actually assessed.
+    return assessment, df
 
 
 def importance_frame(importance: dict) -> pd.DataFrame:
@@ -117,7 +157,18 @@ sensitive = st.sidebar.selectbox(
     "Sensitive attribute", columns, index=columns.index(sensitive_default)
 )
 threshold = st.sidebar.slider("Decision threshold", 0.05, 0.95, 0.50, 0.05)
-use_reference = st.sidebar.checkbox("Use this dataset as drift reference", value=True)
+
+# RC-07: no default self-reference — drift needs a real baseline.
+dataset_choices = available_datasets()
+reference_name = st.sidebar.selectbox(
+    "Drift reference dataset (optional)",
+    ["— none —"] + dataset_choices,
+    index=0,
+    help="Compare the assessed dataset against a *different* dataset to detect drift.",
+)
+if reference_name == "— none —":
+    reference_name = None
+
 texts_block = st.sidebar.text_area(
     "Optional: texts to check (one per line)",
     placeholder="Paste model outputs here to check toxicity / bias / PII…",
@@ -126,10 +177,11 @@ texts_block = st.sidebar.text_area(
 if st.sidebar.button("Run assessment", type="primary"):
     texts = [line for line in texts_block.splitlines() if line.strip()]
     try:
-        st.session_state["assessment"] = run_pipeline(
-            df, model_path, sensitive, label, threshold, use_reference, texts
+        assessment, assessed_df = run_pipeline(
+            df, model_path, sensitive, label, threshold, reference_name, texts
         )
-        st.session_state["explain_df"] = df
+        st.session_state["assessment"] = assessment
+        st.session_state["explain_df"] = assessed_df
     except ValueError as exc:
         st.sidebar.error(f"Assessment failed: {exc}")
         st.stop()
@@ -159,6 +211,23 @@ with tabs[0]:
     left.metric("Risk score", f"{assessment['risk']['score']:.2f}")
     mid.metric("Risk level", assessment["risk"]["level"])
     right.metric("Suggested decision", assessment["decision"])
+    evaluation = assessment.get("evaluation") or {}
+    if evaluation:
+        scope = evaluation.get("scope")
+        st.info(
+            f"Evaluation scope: **{scope}** — {evaluation.get('n_rows')} of "
+            f"{evaluation.get('n_dataset_rows')} rows were scored."
+            + ("  These rows were **not** used for training."
+               if scope == "holdout" else
+               "  ⚠️ The model was trained on part of this data, so the numbers are in-sample.")
+        )
+    coverage = assessment["risk"].get("coverage")
+    if coverage is not None:
+        st.caption(
+            f"Risk weight coverage: {coverage:.0%} "
+            f"(dimensions assessed: {', '.join(assessment['risk'].get('dimensions_assessed') or [])}) "
+            "— scores are only comparable between assessments with the same coverage."
+        )
     contributions = pd.Series(assessment["risk"]["contributions"], name="contribution")
     st.plotly_chart(px.bar(contributions.sort_values(), orientation="h",
                            title="Risk contributions"), use_container_width=True)
@@ -166,7 +235,11 @@ with tabs[0]:
     for item in assessment["recommendations"]:
         st.markdown(f"- {item}")
     st.subheader("Dataset profile")
-    st.dataframe(pd.DataFrame(data.profile_dataset(df)["numeric_summary"]).T)
+    # RC-20: profile the dataset that was actually assessed.
+    assessed_df = st.session_state.get("explain_df", df)
+    profile = data.profile_dataset(assessed_df)
+    st.caption(f"{profile['rows']} rows · {profile['columns']} columns")
+    st.dataframe(pd.DataFrame(profile["numeric_summary"]).T)
 
 # Fairness
 with tabs[1]:
@@ -177,6 +250,16 @@ with tabs[1]:
     c2.metric("Equalized odds difference",
               f"{fairness['equalized_odds_difference']:.3f}")
     st.caption(report.DISCLAIMER)
+    for key, label_text in (("demographic_parity_difference_ci", "Demographic parity 95% CI"),
+                            ("equalized_odds_difference_ci", "Equalized odds 95% CI")):
+        interval = fairness.get(key)
+        if interval:
+            st.caption(f"{label_text}: [{interval[0]} – {interval[1]}]")
+    if fairness.get("small_groups"):
+        st.warning(
+            f"Small groups (fewer than {config.MIN_GROUP_SIZE} rows — metrics are noisy): "
+            + ", ".join(str(g) for g in fairness["small_groups"])
+        )
     metrics_order = ["selection_rate", "accuracy", "precision", "recall"]
     frame = pd.DataFrame(fairness["by_group"]).reindex(metrics_order)
     st.dataframe(frame)
@@ -194,6 +277,12 @@ with tabs[2]:
     if not explainability:
         st.info("Explainability was disabled for this run.")
     else:
+        st.caption(
+            f"SHAP explainer: `{explainability.get('explainer', 'unknown')}` — "
+            f"background {explainability.get('n_background', '—')} rows. "
+            "Tree/linear explainers are exact and orders of magnitude faster than the "
+            "model-agnostic fallback."
+        )
         st.plotly_chart(
             px.bar(importance_frame(explainability["global_importance"]).head(10),
                    x="mean |SHAP|", y="feature", orientation="h",
@@ -228,7 +317,10 @@ with tabs[3]:
 with tabs[4]:
     drift = assessment.get("drift")
     if not drift:
-        st.info("Drift was not requested for this run (no reference dataset).")
+        st.info(
+            "Drift was not requested for this run. Pick a **different** reference dataset "
+            "in the sidebar — comparing the dataset with itself always yields PSI = 0."
+        )
     else:
         drift_frame = pd.DataFrame(drift).T.reset_index(names="feature")
         st.dataframe(drift_frame)
@@ -238,6 +330,12 @@ with tabs[4]:
                    color_discrete_map=colors, title="PSI per feature"),
             use_container_width=True,
         )
+        reference = assessment.get("drift_reference") or {}
+        if reference.get("same_as_assessed"):
+            st.warning(
+                "The reference dataset is the assessed dataset itself, so every PSI is 0 by "
+                "construction. This is a **baseline**, not evidence that the data is stable."
+            )
 
 # Performance
 with tabs[5]:
@@ -245,6 +343,14 @@ with tabs[5]:
     c = st.columns(5)
     for column, key in zip(c, ["accuracy", "precision", "recall", "f1", "roc_auc"]):
         column.metric(key.upper(), f"{performance.get(key, float('nan')):.3f}")
+    if performance.get("calibration_error") is not None:
+        c2, c3 = st.columns(2)
+        c2.metric("Calibration error (ECE)", f"{performance['calibration_error']:.3f}")
+        c3.metric("Brier score", f"{performance['brier_score']:.3f}")
+        st.caption(
+            "Calibration measures how well the predicted probabilities match reality — "
+            "important because the decision threshold relies on them."
+        )
     matrix = performance["confusion_matrix"]
     st.plotly_chart(
         px.imshow(matrix, text_auto=True, color_continuous_scale="Blues",
@@ -263,6 +369,9 @@ with tabs[6]:
         c1.metric("Overall text risk", f"{text['risk']:.2f}")
         c2.metric("Flagged texts", f"{text['flagged']} / {text['n_texts']}")
         st.caption(f"Backend: {text['backend']} — install transformers+torch for local model judges.")
+        backends = text.get("backends") or {}
+        if backends:
+            st.caption("Backend per check: " + ", ".join(f"{k}={v}" for k, v in backends.items()))
         st.plotly_chart(
             px.bar(pd.Series(text["kind_summary"], name="mean score"),
                    title="Mean score per check"),
