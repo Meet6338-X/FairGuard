@@ -7,15 +7,23 @@ feeds it into ``risk.compute_risk``.
 The default heuristic backend is offline and needs no extra packages.
 Install ``transformers`` (and ``torch``) to automatically use the local
 Hugging Face models listed in ``config.JUDGE_MODELS``.
-"""
 
+Root causes fixed here
+----------------------
+* **RC-13** the PII judge existed but was never used — ``DEFAULT_KINDS`` did
+  not include it, so PII in generated text was silently ignored.
+* **RC-14** only the *first* judge's backend was reported.  When the
+  transformer backend failed for one kind and silently fell back to the
+  heuristic one, the report still claimed "transformer".  The backend is now
+  reported per kind.
+"""
 from __future__ import annotations
 
 from typing import Optional, Sequence
 
 from .judges import get_judge
 
-DEFAULT_KINDS = ("toxicity", "bias", "hate_speech")
+DEFAULT_KINDS = ("toxicity", "bias", "hate_speech", "pii")
 FLAG_THRESHOLD = 0.5
 
 
@@ -28,16 +36,24 @@ def evaluate_texts(
     """Score every text for the requested risk kinds.
 
     Returns a dict with an overall ``risk`` (mean of per-text risks), the
-    number of ``flagged`` texts (risk >= 0.5), a per-kind mean and the full
-    per-text breakdown (texts truncated to 120 characters for reports).
+    number of ``flagged`` texts (risk >= 0.5), a per-kind mean, the backend
+    actually used *per kind* and the full per-text breakdown (texts truncated
+    to 120 characters for reports).
     """
     texts = list(texts)
     kinds = list(kinds) if kinds else list(DEFAULT_KINDS)
     if references is not None and "hallucination" not in kinds:
         kinds.append("hallucination")
+    if references is not None and len(references) != len(texts):
+        raise ValueError(
+            f"references has {len(references)} entries but {len(texts)} texts were given"
+        )
 
     judges = {kind: get_judge(kind, backend=backend) for kind in kinds}
-    used_backend = judges[kinds[0]].name if kinds else "none"
+    # RC-14: report the backend of *every* kind, not just the first one.
+    backends = {kind: judge.name for kind, judge in judges.items()}
+    used_backend = ("mixed" if len(set(backends.values())) > 1
+                    else (next(iter(backends.values())) if backends else "none"))
 
     per_text = []
     for i, text in enumerate(texts):
@@ -66,10 +82,13 @@ def evaluate_texts(
 
     return {
         "backend": used_backend,
+        "backends": backends,
         "n_texts": len(texts),
+        "kinds": list(kinds),
         "kind_summary": kind_summary,
         "risk": overall,
         "flagged": sum(1 for item in per_text if item["flagged"]),
+        "flag_threshold": FLAG_THRESHOLD,
         "per_text": per_text,
     }
 
