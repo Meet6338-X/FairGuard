@@ -1,0 +1,132 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1180" height="760" viewBox="0 0 1180 760" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#334155"/>
+    </marker>
+    <linearGradient id="head" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#0f766e"/><stop offset="1" stop-color="#115e59"/>
+    </linearGradient>
+    <linearGradient id="engine" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f8fafc"/><stop offset="1" stop-color="#e2e8f0"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="0" y="0" width="1180" height="760" fill="#ffffff"/>
+  <text x="24" y="46" font-size="24" font-weight="700" fill="#0f766e">FairGuard AI — architecture</text>
+  <text x="24" y="70" font-size="13" fill="#475569">Every assessment is one call → one audit-ready record (JSON + Markdown + model card + MLflow).</text>
+
+  <!-- inputs -->
+  <rect x="30" y="110" width="176" height="120" rx="10" fill="#ecfdf5" stroke="#10b981" stroke-width="1.5"/>
+  <text x="118" y="136" font-size="14" font-weight="700" fill="#065f46" text-anchor="middle">Dataset (CSV)</text>
+  <text x="118" y="156" font-size="11" fill="#064e3b" text-anchor="middle">11 real + synthetic sets</text>
+  <text x="118" y="172" font-size="11" fill="#064e3b" text-anchor="middle">data.py: load · validate</text>
+  <text x="118" y="188" font-size="11" fill="#064e3b" text-anchor="middle">profile · encode label</text>
+  <text x="118" y="212" font-size="10" fill="#047857" text-anchor="middle">leak guard: label 1:1 copies</text>
+
+  <rect x="30" y="250" width="176" height="86" rx="10" fill="#eff6ff" stroke="#3b82f6" stroke-width="1.5"/>
+  <text x="118" y="276" font-size="14" font-weight="700" fill="#1e3a8a" text-anchor="middle">Trained model</text>
+  <text x="118" y="296" font-size="11" fill="#1e3a8a" text-anchor="middle">.pkl artifact + hold-out</text>
+  <text x="118" y="312" font-size="11" fill="#1e3a8a" text-anchor="middle">balanced weights · one-hot</text>
+
+  <rect x="30" y="352" width="176" height="72" rx="10" fill="#fefce8" stroke="#eab308" stroke-width="1.5"/>
+  <text x="118" y="378" font-size="14" font-weight="700" fill="#713f12" text-anchor="middle">Optional texts</text>
+  <text x="118" y="398" font-size="11" fill="#713f12" text-anchor="middle">toxicity · bias · hate · PII</text>
+
+  <!-- assessment pipeline -->
+  <rect x="250" y="96" width="640" height="360" rx="14" fill="url(#engine)" stroke="#0f766e" stroke-width="2"/>
+  <text x="570" y="124" font-size="15" font-weight="700" fill="#0f766e" text-anchor="middle">pipeline.run_assessment()</text>
+
+  <g font-size="12" fill="#0f172a">
+    <rect x="280" y="146" width="180" height="58" rx="8" fill="#ffffff" stroke="#64748b"/>
+    <text x="370" y="169" font-weight="700" text-anchor="middle">train.py</text>
+    <text x="370" y="188" text-anchor="middle" fill="#64748b">holdout scored first</text>
+
+    <rect x="480" y="146" width="180" height="58" rx="8" fill="#ffffff" stroke="#64748b"/>
+    <text x="570" y="169" font-weight="700" text-anchor="middle">performance.py</text>
+    <text x="570" y="188" text-anchor="middle" fill="#64748b">acc · F1 · ROC · Brier · ECE</text>
+
+    <rect x="680" y="146" width="180" height="58" rx="8" fill="#ffffff" stroke="#64748b"/>
+    <text x="770" y="169" font-weight="700" text-anchor="middle">fairness.py</text>
+    <text x="770" y="188" text-anchor="middle" fill="#64748b">DPD · EOD · 95 % CIs</text>
+
+    <rect x="280" y="222" width="180" height="58" rx="8" fill="#ffffff" stroke="#64748b"/>
+    <text x="370" y="245" font-weight="700" text-anchor="middle">explainability.py</text>
+    <text x="370" y="264" text-anchor="middle" fill="#64748b">exact SHAP (tree/linear)</text>
+
+    <rect x="480" y="222" width="180" height="58" rx="8" fill="#ffffff" stroke="#64748b"/>
+    <text x="570" y="245" font-weight="700" text-anchor="middle">privacy.py</text>
+    <text x="570" y="264" text-anchor="middle" fill="#64748b">type-aware PII scan</text>
+
+    <rect x="680" y="222" width="180" height="58" rx="8" fill="#ffffff" stroke="#64748b"/>
+    <text x="770" y="245" font-weight="700" text-anchor="middle">drift.py</text>
+    <text x="770" y="264" text-anchor="middle" fill="#64748b">PSI + KS, importance-blend</text>
+
+    <rect x="380" y="298" width="380" height="58" rx="8" fill="#ffffff" stroke="#64748b"/>
+    <text x="570" y="321" font-weight="700" text-anchor="middle">judges.py + llm_eval.py</text>
+    <text x="570" y="340" text-anchor="middle" fill="#64748b">heuristic now · transformer per-kind task</text>
+
+    <rect x="280" y="374" width="580" height="62" rx="8" fill="#0f766e"/>
+    <text x="570" y="399" font-weight="700" text-anchor="middle" fill="#ecfdf5">risk.py — weighted score + coverage, recommendations, decision</text>
+    <text x="570" y="419" text-anchor="middle" fill="#a7f3d0">Low ≤ .25 · Medium ≤ .50 · High ≤ .75 · Critical above</text>
+  </g>
+
+  <!-- flow arrows input→pipeline -->
+  <path d="M 206 170 h 30" stroke="#334155" stroke-width="2" marker-end="url(#arrow)"/>
+  <path d="M 206 293 h 30 v -89" stroke="#334155" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+  <path d="M 206 388 h 40 v -40" stroke="#334155" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+
+  <!-- outputs -->
+  <rect x="920" y="146" width="230" height="120" rx="10" fill="#faf5ff" stroke="#a855f7" stroke-width="1.5"/>
+  <text x="1035" y="172" font-size="14" font-weight="700" fill="#581c87" text-anchor="middle">report.py</text>
+  <text x="1035" y="192" font-size="11" fill="#4c1d95" text-anchor="middle">JSON record</text>
+  <text x="1035" y="208" font-size="11" fill="#4c1d95" text-anchor="middle">Markdown report</text>
+  <text x="1035" y="224" font-size="11" fill="#4c1d95" text-anchor="middle">automated model card</text>
+  <text x="1035" y="246" font-size="10" fill="#7e22ce" text-anchor="middle">⚠ leakage sections when found</text>
+
+  <rect x="920" y="292" width="230" height="96" rx="10" fill="#fff1f2" stroke="#f43f5e" stroke-width="1.5"/>
+  <text x="1035" y="318" font-size="14" font-weight="700" fill="#881337" text-anchor="middle">tracking.py (MLflow)</text>
+  <text x="1035" y="338" font-size="11" fill="#881337" text-anchor="middle">params · metrics · tags</text>
+  <text x="1035" y="354" font-size="11" fill="#881337" text-anchor="middle">scope + explainer per run</text>
+  <text x="1035" y="374" font-size="10" fill="#be123c" text-anchor="middle">history() → dashboard Runs</text>
+
+  <path d="M 890 165 h 26" stroke="#334155" stroke-width="2" marker-end="url(#arrow)"/>
+  <path d="M 890 388 h 20 v -44 h 10" stroke="#334155" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+
+  <!-- front doors -->
+  <text x="24" y="492" font-size="14" font-weight="700" fill="#0f766e">Front doors</text>
+  <g font-size="12">
+    <rect x="30" y="510" width="256" height="104" rx="10" fill="#f0fdfa" stroke="#0f766e" stroke-width="1.5"/>
+    <text x="158" y="536" font-weight="700" text-anchor="middle" fill="#134e4a">CLI · scripts/</text>
+    <text x="158" y="556" text-anchor="middle" fill="#334155">make_demo_data · train_demo_model</text>
+    <text x="158" y="572" text-anchor="middle" fill="#334155">run_assessment · retrain_all</text>
+    <text x="158" y="588" text-anchor="middle" fill="#334155">visualize_data · estimate_accuracy</text>
+
+    <rect x="306" y="510" width="256" height="104" rx="10" fill="#f0fdfa" stroke="#0f766e" stroke-width="1.5"/>
+    <text x="434" y="536" font-weight="700" text-anchor="middle" fill="#134e4a">Streamlit · app.py</text>
+    <text x="434" y="556" text-anchor="middle" fill="#334155">10 tabs, one-click assessment,</text>
+    <text x="434" y="572" text-anchor="middle" fill="#334155">drift reference picker, CIs,</text>
+    <text x="434" y="588" text-anchor="middle" fill="#334155">reviewer decision</text>
+
+    <rect x="582" y="510" width="256" height="104" rx="10" fill="#f0fdfa" stroke="#0f766e" stroke-width="1.5"/>
+    <text x="710" y="536" font-weight="700" text-anchor="middle" fill="#134e4a">API · api.py (FastAPI)</text>
+    <text x="710" y="556" text-anchor="middle" fill="#334155">/train /assess /review /history</text>
+    <text x="710" y="572" text-anchor="middle" fill="#334155">/report/{run_id}/{fmt}</text>
+    <text x="710" y="588" text-anchor="middle" fill="#334155">review by run_id (RC-16)</text>
+
+    <rect x="858" y="510" width="292" height="104" rx="10" fill="#f0fdfa" stroke="#0f766e" stroke-width="1.5"/>
+    <text x="1004" y="536" font-weight="700" text-anchor="middle" fill="#134e4a">React · frontend/</text>
+    <text x="1004" y="556" text-anchor="middle" fill="#334155">Dashboard · Train · Assess ·</text>
+    <text x="1004" y="572" text-anchor="middle" fill="#334155">Results · History</text>
+    <text x="1004" y="588" text-anchor="middle" fill="#334155">Vite + Tailwind, talks to api.py</text>
+  </g>
+
+  <!-- footer strip -->
+  <rect x="30" y="646" width="1120" height="86" rx="10" fill="#f8fafc" stroke="#cbd5e1"/>
+  <text x="52" y="674" font-size="12.5" font-weight="700" fill="#0f766e">Invariants the pipeline enforces</text>
+  <g font-size="12" fill="#334155">
+    <text x="52" y="698">① Out-of-sample by default — the hold-out lives in the artifact; --full-dataset is clearly labelled in-sample.</text>
+    <text x="52" y="716">② Drift needs a different dataset — a self-comparison is labelled a baseline, never "no drift".</text>
+    <text x="52" y="730" font-weight="400">③ Label duplicates refused — RC-23 guard + an assessment-time leak warning that invalidates the report.</text>
+  </g>
+</svg>
